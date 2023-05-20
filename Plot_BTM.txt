@@ -1,0 +1,11 @@
+set xlabel "Temps (s)"
+set ylabel "G-Force (m/s^2)"
+set y2label "Angular velocity (rad/s)"
+set datafile separator ","
+set grid
+show margin
+
+plot "BTM.csv" u 1:5 w l title "ax",\
+"BTM.csv" u 1:6 w l title "ay",\
+"BTM.csv" u 1:7 w l title "az"
+#"BTM.csv" u 1:(sqrt(($5)**2*($6)**2*($7)**2)) w l title "Total a"
