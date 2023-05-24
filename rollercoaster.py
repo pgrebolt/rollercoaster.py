@@ -8,9 +8,9 @@ Created on Thu Apr 20 15:24:00 2023
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import scipy.integrate as spint
+from scipy.integrate import ode
 from scipy.spatial.transform import Rotation as R
-import pdb
+import scipy.interpolate
 
 #Carreguem les dades
 file = 'IndianaJonesDisney071219.csv'
@@ -35,78 +35,93 @@ time, ax, ay, az, wx, wy, wz = time[good_idxs], ax[good_idxs], ay[good_idxs], az
 tvar = [time[i]-time[i-1] for i in range(len(time))]
 tvar[0] = 0. #Redefinim el punt inicial
 
-#Si volem trobar l'angle respecte el sistema inicial a cada instant de temps
-ox, oy, oz = np.zeros(len(time)), np.zeros(len(time)), np.zeros(len(time))
-for i in range(len(time)):
-    if i == 0:
-        continue
-    else:
-        ox[i] = ox[i-1] + wx[i]*tvar[i] #Reescrivim un valor pel producte de les seves matrius de rotació
-        oy[i] = oy[i - 1] + wy[i] * tvar[i]  # Reescrivim un valor pel producte de les seves matrius de rotació
-        oz[i] = oz[i - 1] + wz[i] * tvar[i]  # Reescrivim un valor pel producte de les seves matrius de rotació
-        if ox[i] > 2*np.pi:
-            ox[i] = ox[i] - 2*np.pi
-        elif ox[i] < 2*np.pi:
-            ox[i] = ox[i] + 2*np.pi
-        if oy[i] > 2*np.pi:
-            oy[i] = oy[i] - 2*np.pi
-        elif oy[i] < 2*np.pi:
-            oy[i] = oy[i] + 2*np.pi
-        if oz[i] > 2*np.pi:
-            oz[i] = oz[i] - 2*np.pi
-        elif oz[i] < 2*np.pi:
-            oz[i] = oz[i] + 2*np.pi
+def odes(t, solution, data, time_mes):
 
-#Matrius de rotació en cada eix
-rx, ry, rz = R.from_euler('x', wx*tvar).as_matrix(), R.from_euler('y', wy*tvar).as_matrix(),\
-            R.from_euler('z', wz*tvar).as_matrix()
-#Aquests elements contenen les matrius de rotació que cal aplicar a cada punt, però les velocitats estan mesurades a partir de la posició
-#anterior. Per trobar-ho respecte la posició inicial cal aplicar successives rotacions
+    '''
+    Aquesta és la funció que torna les derivades a cada punt. En total tenim un sistema de 3 odes: do/dt, dx/dt i dv/dt
+    '''
 
-for i in range(len(time)):
-    if i == 0:
-        continue
-    else:
-        rx[i] = np.matmul(rx[i], rx[i-1]) #Reescrivim un valor pel producte de les seves matrius de rotació
-        #En aquest loop es garanteix que l'element rx[i] provingui de la multiplicació de les i-1 matrius anteriors
+    #Extraiem els valors de solution. Aquests són els valors de les derivades: angle, velocitat, posició
+    theta = solution[:3] #angles de rotació a cada eix (EN PRINCIPI NO ESTAN LIMITATS EN (-2PI, +2PI)
+    v = solution[3:6] #velocitat lineal (amb el canvi de sistema de referència fet)
+    x = solution[6:9] #posició (amb el canvi de sistema de referència fet)
 
-#Matrius de rotació total que s'han d'aplicar a cada mesura.
-rot = np.matmul(np.matmul(rx, ry), rz) #Provenen del producte de les tres matrius
+    #Extraiem els valors mesurats
+    w_mes = data[:3]
+    a_mes = data[3:6]
 
-#Vectors acceleració a cada instant de temps
-a = (np.array([list(ax), list(ay), list(az)])).T
+    #Extrapolem els valors de w i a al punt on s'està integrant
+    w = scipy.interpolate.interp1d(time_mes, w_mes, kind='linear')(t)
+    a = scipy.interpolate.interp1d(time_mes, a_mes, kind='linear')(t)
 
-#Transformem els vectors d'acceleració al sistema de referència inicial
-a_trans = np.array([np.matmul(rot[i], a[i]) for i in range(len(time))])
-#Ja podem integrar!
+    '''
+    Rotem el vector acceleració per passar-lo al sistema de referència inicial
+    '''
+    # Matrius de rotació en cada eix
+    rx, ry, rz = R.from_euler('x', theta[0]).as_matrix(), R.from_euler('y', theta[1]).as_matrix(), \
+        R.from_euler('z', theta[2]).as_matrix()
+    # Aquests elements contenen les matrius de rotació que cal aplicar a cada punt, però les velocitats estan mesurades a partir de la posició
+    # anterior. Per trobar-ho respecte la posició inicial cal aplicar successives rotacions
+
+    # Matrius de rotació total que s'han d'aplicar a cada mesura.
+    rot = np.matmul(np.matmul(rx, ry), rz)  # Provenen del producte de les tres matrius
+    rot = rx.dot(ry.dot(rz))
+
+    #Rotem el vector acceleració
+    a_rot = rot.dot(a)
+
+    #Matriu on hi guardem els valors de les derivades
+    derivatives = np.zeros(6)
+    derivatives[:3] = w #derivada de l'angle és la velocitat angular
+    derivatives[3:6] = a_rot #derivada de la velocitat és l'acceleració (lineals)
+    #derivatives[6:9] = v #derivada de la posició és la velocitat lineal
+
+    return derivatives
+
+results, t_results = [], [] #Arrays on hi guardarem els resultats de la integració
+def solout(t, solution):
+    '''
+    Aquesta funció s'executa cada vegada que es completa un pas d'integració.
+    Nosaltres la fem servir per guardar els valors de la solució a cada instant de temps.
+    '''
+    #Guardem els resultats d'aquest pas d'integració
+    results.extend([solution.copy()])
+    t_results.extend([t])
+
+    #Seguim integrant (si fem return -1 s'atura la integració)
+    return 0
 
 
-# Define the function dv/dt = -a
-def dvdt(t, v, a):
-    return -a
+'''
+    Resolem el sistema d'equacions diferencials
+'''
 
-# Define the time range and acceleration values
+#Definim el mètode d'integració numèrica i els seus paràmetres
+X = np.zeros((6, 1)) #tots els valors inicials d'angle, velocitat i posició són 0
+t0 = np.min(time) #temps inicial és 0
 
-# Define the initial velocity
-v0 = 0
+data = np.array([wx, wy, wz, ax, ay, az]) #Valors mesurats
 
-# Solve the differential equation using solve_ivp
-sol = spint.solve_ivp(dvdt, [time[0], time[-1]], [v0]*len(time), t_eval=time, args=(a_trans[:,0],), dense_output=True)
+solver = ode(odes).set_integrator('dopri5', first_step = tvar[1], max_step = np.max(tvar), rtol = 1e-5)
+solver.set_initial_value(X, t0).set_f_params(data, time)
+solver.set_solout(solout)
 
-# Extract the velocity values at each time point
-vx = sol.y[0]
+#Aquí es fa la integració
+solver.integrate(np.max(time))
 
-print(vx)
+'''
+Fem el plot dels resultats
+'''
 
-plt.plot(time,vx)
+#Extraiem els valors de la integració
+theta = results[:3]
+v = results[3:6]
+x = results[6:9]
+
+plt.plot(time,v[0])
 #plt.plot(time, ox)
 #plt.plot(time, oy)
 #plt.plot(time, oz)
 plt.ylabel("vel (m/s)")
 plt.xlabel("t (s)")
 plt.show()
-
-
-'''
-
-'''
