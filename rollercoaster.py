@@ -50,7 +50,7 @@ def odes(t, solution, data, time_mes):
     w_mes = data[:3]
     a_mes = data[3:6]
 
-    #Extrapolem els valors de w i a al punt on s'està integrant
+    #Interpolem els valors de w i a al punt on s'està integrant
     w = scipy.interpolate.interp1d(time_mes, w_mes, kind='linear')(t)
     a = scipy.interpolate.interp1d(time_mes, a_mes, kind='linear')(t)
 
@@ -67,26 +67,30 @@ def odes(t, solution, data, time_mes):
     rot = np.matmul(np.matmul(rx, ry), rz)  # Provenen del producte de les tres matrius
     rot = rx.dot(ry.dot(rz))
 
-    #Rotem el vector acceleració
+    #Rotem el vector acceleració per passar-lo al sistema de referència inicial
     a_rot = rot.dot(a)
 
     #Matriu on hi guardem els valors de les derivades
-    derivatives = np.zeros(6)
+    derivatives = np.zeros(9)
     derivatives[:3] = w #derivada de l'angle és la velocitat angular
     derivatives[3:6] = a_rot #derivada de la velocitat és l'acceleració (lineals)
-    #derivatives[6:9] = v #derivada de la posició és la velocitat lineal
+    derivatives[6:9] = v #derivada de la posició és la velocitat lineal
 
     return derivatives
 
-results, t_results = [], [] #Arrays on hi guardarem els resultats de la integració
+
+results, t_results = [], []  # Arrays on hi guardarem els resultats de la integració
+i = 0 #Comptador per les arrays on es guarden els resultats de la integraicó
 def solout(t, solution):
     '''
     Aquesta funció s'executa cada vegada que es completa un pas d'integració.
     Nosaltres la fem servir per guardar els valors de la solució a cada instant de temps.
     '''
     #Guardem els resultats d'aquest pas d'integració
-    results.extend([solution.copy()])
-    t_results.extend([t])
+    results.append(list(solution))
+    t_results.append(t)
+    # results = np.vstack((results, solution))
+    # t_results = np.append(t_results, t)
 
     #Seguim integrant (si fem return -1 s'atura la integració)
     return 0
@@ -97,12 +101,12 @@ def solout(t, solution):
 '''
 
 #Definim el mètode d'integració numèrica i els seus paràmetres
-X = np.zeros((6, 1)) #tots els valors inicials d'angle, velocitat i posició són 0
+X = np.zeros((9, 1)) #tots els valors inicials d'angle, velocitat i posició són 0
 t0 = np.min(time) #temps inicial és 0
 
 data = np.array([wx, wy, wz, ax, ay, az]) #Valors mesurats
 
-solver = ode(odes).set_integrator('dopri5', first_step = tvar[1], max_step = np.max(tvar), rtol = 1e-5)
+solver = ode(odes).set_integrator('dopri5', first_step = tvar[1], max_step = np.max(tvar), rtol = 1e-4, nsteps = 10000)
 solver.set_initial_value(X, t0).set_f_params(data, time)
 solver.set_solout(solout)
 
@@ -113,15 +117,33 @@ solver.integrate(np.max(time))
 Fem el plot dels resultats
 '''
 
-#Extraiem els valors de la integració
-theta = results[:3]
-v = results[3:6]
-x = results[6:9]
+results = np.array(results)
+#Convertim angles en (-2*pi, +2*pi)
+for i in range(3):
+    mask = results[:,i]>0 #Prendrem els valors positius
+    results[:, i][mask] = results[:, i][mask] % (2*np.pi) # Acotem els valors d'angles positius
+    results[:, i][~mask] = - (-results[:, i][~mask] % (2 * np.pi)) # Acotem els valors d'angles negatius (primer els fem positius i depsrés els tornem a negatius)
 
-plt.plot(time,v[0])
+#Extraiem els valors de la integració
+theta = (results[:, :3])* 360/(2*np.pi) # Angle de rotació rad->deg
+v = results[:, 3:6] # Velocitat lineal
+x = results[:, 6:9] # Posició
+
+
+'''
+plt.plot(t_results,theta[:, 0])
+plt.plot(t_results,theta[:, 1])
+plt.plot(t_results,theta[:, 2])
 #plt.plot(time, ox)
 #plt.plot(time, oy)
 #plt.plot(time, oz)
 plt.ylabel("vel (m/s)")
 plt.xlabel("t (s)")
 plt.show()
+'''
+
+import mayavi.mlab
+
+mayavi.mlab.plot3d(x[:,0], x[:,1], x[:,2], tube_radius = 0.02)
+mayavi.mlab.show()
+#NO FA BÉ LA INTEGRACIÓ :(
